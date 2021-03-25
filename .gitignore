@@ -1,0 +1,20 @@
+#python
+__pycache__/
+*.pyc
+
+# dist
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+
+
+# editor & testing
+.vscode/
+.mypy_cache/
+test/**

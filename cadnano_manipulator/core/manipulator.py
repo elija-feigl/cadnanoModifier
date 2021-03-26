@@ -2,16 +2,27 @@ from dataclasses import dataclass
 from typing import List, Dict
 from pathlib import Path
 import json
+import logging
 
 
 @dataclass
 class Manipulator:
-    json: Path
+    path: Path
 
     def __post_init__(self):
-        with self.json.open(mode="r") as f:
+        with self.path.open(mode="r") as f:
             self.data = json.load(f)
         self.helices: List[Dict] = self.data["vstrands"].copy()
+        self.logger = self._get_logger(__name__)
+
+    def _get_logger(self, name):
+        logger = logging.getLogger()
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '[%(name)s] %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        return logger
 
     def number_of_helices(self):
         return len(self.helices)
@@ -27,213 +38,208 @@ class Manipulator:
     def find_helices(self, propname="all", propvalue="") -> List:
         """ search for helix by property name"""
         if propname == "all":
-            return self.helices.copy()
+            return list(range(len(self.helices)))
         else:
-            return [h for h in self.helices if h[propname] == propvalue]
+            return [i for i, h in enumerate(self.helices) if h[propname] == propvalue]
 
-    def delete_helices(self, helices):
-        """ delete all helices in selection from manipulator """
-        while helices:
-            self.helices.remove(helices.pop())
+    def delete_helices(self, selection):
+        """ delete all helices in selection from manipulator
 
-    def shift_all_helices(self, shiftnumber):
-        """ shifts the helix NUMBERS by the given shiftnumber
-            affects all (!) helices
-            this is the "correct" shifting mode as it affects the staple and scaffold indices as well"""
+            CHANGES self.helix
+        """
+        for idx in selection:
+            del_helix = self.helices.pop(idx)
+            # TODO: fix "broken" crossovers
+            num = del_helix["num"]
+            n_bases = len(1 for b in del_helix["scaf"] if is_nonempty_(b))
+            self.logger.debug(f"Removed Helix {num} with {n_bases} bases")
 
-        print("shifting...")
-        self.shift_arrangement(shiftnumber, "num")
-        # self.shift_arrangement(shiftnumber, "row")
+    def shift_position(self, selection: List[int], shift: int):
+        """ Shift the position of all selected helices.
+            NOTE: scafLoop, stapLoop allways []
+            TODO: include warning if shifting against lattice
 
-        for helix in self.helices:
-            helix["scaf"] = "[" + \
-                self._shift_bases(helix["scaf"], shiftnumber)+"]"
-            helix["stap"] = "[" + \
-                self._shift_bases(helix["stap"], shiftnumber) + "]"
-        # TODO: shift color dict!!!
-        print("done")
+            CHANGES self.helix
+        """
+        def adapt_overall_length():
+            """ check if helices need to be extended with extra segments
+                cadnano oly allows full segments
 
-    def _shift_bases(self, base_seq, shift):
-        # base seq as string in the format "[1,2,3,3],[....],[n,n,n,n]"
-        # return string has the same format
-        base_seq = base_seq[2:len(base_seq)-2]
-        # print (base_seq)
-        # stap_seq = stap_seq[1:len(stap_seq)-1]
-        base_seq = base_seq.split("],[")
+                CHANGES self.helix
+            """
+            for helix in self.helices:
+                len_helix = len(helix["scaf"])
+                termini = [len_helix, 0]
+                for strand in ["scaf", "stap"]:
+                    for reverse, t in enumerate(termini):
+                        bases = reversed(
+                            helix[strand]) if reverse else helix[strand]
+                        idx = next(idx for idx, b in enumerate(
+                            bases) if is_nonempty_(b))
+                        t = t if reverse * (t > idx) else idx
 
-        # final_list = list()
+                if (termini[0] + shift) < 0:
+                    n_extra = abs(termini[0] + shift)
+                    extend_right = False
+                elif (termini[1] + shift) > len_helix:
+                    n_extra = (termini[1] + shift) - len_helix
+                    extend_right = True
+                else:
+                    return
 
-        return_staple_list = str()
+            # NOTE: cadnano only allows full segments 8 for sq, 7 for hc
+            n_multi = 8 if not len_helix % 8 else 7
+            if len_helix % 8 and len_helix % 7:
+                prompt = ""
+                while prompt not in ["y", "n"]:
+                    prompt = input("is this square lattice? [y/n]")
+                    n_multi = 8 if prompt == "y" else 7
+            n_extra = n_multi * (n_extra // n_multi + 1)
+            extra = [(4 * [-1])] * n_extra
+            extra_loopskip = [0] * n_extra
 
-        for base in base_seq:
-            base_list = base.split(",")
-            # print (base_list)
-            if (int(base_list[0])) > -1:
-                base_list[0] = str(int(base_list[0])+shift)
-            if (int(base_list[2])) > -1:
-                base_list[2] = str(int(base_list[2])+shift)
-            shifted_base_seq = str()
-            for element in base_list:
-                shifted_base_seq = shifted_base_seq+element+","
-            shifted_base_seq = "[" + \
-                shifted_base_seq[0:len(shifted_base_seq)-1]+"]"
-            return_staple_list = return_staple_list+shifted_base_seq+","
+            for helix in self.helices:
+                if extend_right:
+                    self.logger.debug(f"adding {n_extra} bases to the right")
+                    for strand in ["scaf", "stap"]:
+                        helix[strand] = +extra
+                    for mod in ["skip", "loop"]:
+                        helix[mod] = +extra_loopskip
+                else:
+                    self.logger.debug(f"adding {n_extra} bases to the left")
+                    for strand in ["scaf", "stap"]:
+                        helix[strand] = extra + helix[strand]
+                    for mod in ["skip", "loop"]:
+                        helix[mod] = extra_loopskip + helix[mod]
 
-        return (return_staple_list[0:len(return_staple_list)-1])
+        def shift_list(a_list, abs_shift, sign_shift):
+            for _ in range(abs_shift):
+                if sign_shift == 1:
+                    a_list = a_list[-1] + a_list[:-1]
+                else:
+                    a_list = a_list[1:] + a_list[0]
+            return a_list
 
-    def shift_arrangement(self, helices, shift, direction="col"):
-        # affects only helices in the "search_result", run find_helices first
-        # print (shift)
-        # print (direction)
-        print("moving...")
-        for helix in helices:
-            # print (helix[direction])
-            helix[direction] = str(int(helix[direction])+int(shift))
-        print("done")
-        # self.search_result = list()
+        def _shift_base(base):
+            """ CRITICAL: changes self.helices for helices not in selection!
+                NOTE: dependent on outer scope: STRAND, SELECTION.
+            """
+            if base[0] in selection:  # origin helix will also be shifted
+                base[1] += shift
+            else:  # a crossover points from here to an unselected helix
+                self.helices[base[0]][strand][base[1]][3] += shift
+                self.logger.debug(
+                    f"fixed broken crossover at {(base[0], base[1])}")
+            if base[2] in selection:  # target helix will also be shifted
+                base[3] += shift
+            else:  # a crossover of an unselected helix point here
+                self.helices[base[2]][strand][base[3]][1] += shift
+                self.logger.debug(
+                    f"fixed broken crossover at {(base[2], base[3])}")
+            return base
 
-    def add_file(self, filename):
-        add_helices = list()
-        add_helices = self.parse_json_content(self.read_file(filename)[1])
-        number_of_helices_new = len(add_helices)
-        if number_of_helices_new % 2 != 0:
-            number_of_helices_new = number_of_helices_new+1
-        # in order to prevent position(row, col) conflict, the rows of the old helices should be moved first
-        self.shift_all_helices(number_of_helices_new)
-        self.helices = self.helices + add_helices
-        # for helix in self.helices:
-        # print (helix["num"])
+        adapt_overall_length()
+
+        abs_shift = abs(shift)
+        sign_shift = abs(shift) // abs_shift
+
+        for idx in selection:
+            helix = self.helices[idx]
+            for key in ["skip", "loop", "scaf", "stap"]:
+                shift_list(helix[key], abs_shift, sign_shift)
+            for strand in ["scaf", "stap"]:
+                helix[strand] = [_shift_base(b) for b in helix[strand]]
+
+            helix["stap_colors"] = [[p + shift, color]
+                                    for p, color in helix["stap_colors"]]
+
+    def shift_helix(self, selection: List[int], shift: int, direction: str):
+        """ Shift the all selected helices either by row or column
+        """
+        if direction not in ["col", "row"]:
+            print("can only shift a helix by row or col")
+            return
+
+        helices = self.helices.copy()
+        for idx in selection:
+            helix = helices[idx]
+            helix[direction] += shift
+
+        helix_positions = [(h["row"], h["col"]) for h in helices]
+        if len(helix_positions) != len(set(helix_positions)):
+            print("ABORT: shifting onto existing helix")
+            return
+
+        self.helice = helices
 
     def color_replace(self, old_color, new_color):
-        print("replacing color...")
         for helix in self.helices:
-            # print (helix["stap_colors"])
-            helix_color = helix["stap_colors"][2:len(
-                helix["stap_colors"])-2].split("],[")
-            helix_color_new = str()
-            # print (helix_color)
-            for color_info in helix_color:
-                if len(color_info) > 0:
-                    color_split = color_info.split(",")
-                    if (old_color == "all"):
-                        color_split[1] = new_color
-                    else:
-                        if color_split[1] == old_color:
-                            color_split[1] = new_color
+            helix["stap_colors"] = [[p, new_color]
+                                    for p, color in helix["stap_colors"]
+                                    if color == old_color]
 
-                    mod_color_info = "["+color_split[0]+","+color_split[1]+"]"
-                    helix_color_new = helix_color_new + mod_color_info + ","
-            # print (helix_color_new)
-            helix["stap_colors"] = "[" + \
-                helix_color_new[0:len(helix_color_new)-1]+"]"
-        print("done")
+    def erase_loops(self, selection):
+        """ delete all loops for selected helices """
+        len_helix = len(self.helices[0]["scaf"])
+        for idx in selection:
+            helix = self.helices[idx]
+            helix["loop"] = [0] * len_helix
 
-    def erase_loops(self, helices):
-        # deletes loops in the helices of search_result
-        print("eraseing scaffold loops...")
-        for helix in helices:
-            localloops = helix["loop"][1:len(helix["loop"])-1].split(",")
-            returnloop = str()
-            for loop in localloops:
-                if (int(loop) > 0):
-                    loop = "0"
-                returnloop = returnloop + str(loop)+","
-            loopprop = "["+returnloop[0:len(returnloop)-1]+"]"
-            helix["loop"] = loopprop
-        print("done")
+    def erase_skips(self, selection):
+        """ delete all loops for selected helices """
+        len_helix = len(self.helices[0]["scaf"])
+        for idx in selection:
+            helix = self.helices[idx]
+            helix["skip"] = [0] * len_helix
 
-    def erase_staples(self):
-        print("erasing staples...")
-        for helix in self.helices:
-            helix["stap"]
-            level01 = helix["stap"][2:len(helix["stap"])-2].split("],[")
-            stap_info_deleted = str()
+    def express_skips_loops(self):
+        """ convert loops to actual bases & remove skips.
+            result will look wild.
+        """
+        return NotImplementedError
 
-            for _ in range(0, len(level01)):
-                stap_info_deleted = stap_info_deleted+"[-1,-1,-1,-1],"
-            helix["stap"] = "[" + \
-                stap_info_deleted[0:len(stap_info_deleted)-1]+"]"
-        print("done")
+    def add_file(self, path_add: Path):
+        with path_add.open(mode="r") as f:
+            data_add = json.load(f)
+            helices_add = data_add["vstrands"].copy()
 
-    def equalize_len(self):
-        # equalizes the length of all helices (i.e. the raster)
-        maxlen = 0
-        maxdnalen = 0
-        for helix in self.helices:
-            loops = helix["loop"].split(",")
-            if len(loops) > maxlen:
-                maxlen = len(loops)
+        # check if they can be matched
+        coor_add = {(h["row"], h["col"]) for h in helices_add}
+        coor = {(h["row"], h["col"]) for h in self.helices}
+        if not (coor - coor_add):
+            print("ABORT: these designs overlap")
+            return
 
-        for helix in self.helices:
-            skips = helix["skip"].split(",")
-            if len(skips) > maxlen:
-                maxlen = len(skips)
+        # make sure they have the same length
+        len_helix = len(self.helices[0]["scaf"])
+        len_helix_add = len(helices_add[0]["scaf"])
+        len_add = abs(len_helix - len_helix_add)
+        helices_to_extend = self.helices if len_helix > len_helix_add else helices_add
+        for helix in helices_to_extend:
+            for strand in ["scaf", "stap"]:
+                helix[strand] = [(4 * [-1])] * len_add
+            for mod in ["skip", "loop"]:
+                helix[mod] = [0] * len_add
 
-        restlen = maxlen % 21
-        if restlen != 0:
-            maxlen = maxlen + restlen
+        # push helix num of 2nd
+        max_num = max(h["num"] for h in self.helices)
+        for h in helices_add:
+            h["num"] += max_num
 
-        restdnalen = maxdnalen % 21
-        if restdnalen != 0:
-            maxdnalen = maxdnalen + restdnalen
-
-        for helix in self.helices:
-            staps = helix["stap"].split("],[")
-            if len(staps) > maxdnalen:
-                maxdnalen = len(staps)
-
-        for helix in self.helices:
-            scaffolds = helix["scaf"].split("],[")
-            if len(scaffolds) > maxdnalen:
-                maxdnalen = len(scaffolds)
-
-        for helix in self.helices:
-
-            print("loop: "+str(len(helix["loop"].split(","))))
-            print(len(helix["skip"].split(",")))
-            print(len(helix["scaf"].split("],[")))
-            print(len(helix["stap"].split("],[")))
-
-            if len(helix["loop"].split(","))-maxlen != 0:
-                # different length
-                oldlen = len(helix["loop"].split(","))
-                # print (maxlen-oldlen)
-                for _ in range(0, (maxlen-oldlen)):
-                    # print (len(helix["loop"].split(",")))
-                    helix["loop"] = helix["loop"]+",0"
-                # newlen = len(helix["loop"].split(","))
-                # print (str(oldlen)+"  "+str(newlen))
-
-            if len(helix["skip"].split(","))-maxlen != 0:
-                # different length
-                oldlen = len(helix["skip"].split(","))
-                for _ in range(0, (maxlen-oldlen)):
-                    helix["skip"] = helix["skip"]+",0"
-
-            if len(helix["stap"].split("],["))-maxdnalen != 0:
-                # different length
-                oldlen = len(helix["stap"].split("],["))
-                # print (oldlen)
-                for _ in range(0, (maxdnalen-oldlen)):
-                    helix["stap"] = helix["stap"]+",[-1,-1,-1,-1]"
-                # newlen = len(helix["stap"].split("],["))
-                # print (str(oldlen)+"  "+str(newlen))
-
-            if len(helix["scaf"].split("],["))-maxdnalen != 0:
-                # different length
-                oldlen = len(helix["scaf"].split("],["))
-                for _ in range(0, (maxdnalen-oldlen)):
-                    helix["scaf"] = helix["scaf"]+",[-1,-1,-1,-1]"
-
-            # print ("loop: "+str(len(helix["loop"].split(","))))
-            # print (len(helix["skip"].split(",")))
-            # print (len(helix["scaf"].split("],[")))
-            # print (len(helix["stap"].split("],[")))
+        self.helices += helices_add
+        self.data["name"] += " + " + data_add["name"]
 
     def fix_legacy(self):
         """ Files generated by json_manipulator < 0.7 might crash with cadnano2
                 Fix errors with:
                 * stap_color: p not updated
         """
-        # TODO: reset staple_color list
-        raise NotImplementedError
+        # reset position of staple_color list
+        for helix in self.helices:
+            p5s = [p for p, b in enumerate(helix["stap"]) if b[1] == -1]
+            helix["stap_colors"] = [[p, color]
+                                    for p, (_, color) in zip(p5s, helix["stap_colors"])]
+
+
+def is_nonempty_(base) -> bool:
+    return any(x != -1 for x in base)

@@ -1,4 +1,4 @@
-#python
+# python
 __pycache__/
 *.pyc
 
@@ -17,4 +17,4 @@ eggs/
 # editor & testing
 .vscode/
 .mypy_cache/
-test/**
+test**

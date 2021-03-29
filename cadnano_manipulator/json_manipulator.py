@@ -1,8 +1,11 @@
 from core.manipulator import Manipulator
-from version import __version__
-import random
+import logging
 from pathlib import Path
+import click
+
 import ipdb
+
+__version__ = 0.8
 
 
 def search_input_parse(searchterm):
@@ -17,115 +20,95 @@ def search_input_parse(searchterm):
         return (helixlist[0:len(helixlist)-1].split(","))
 
 
-def main():
-    menuchoice = str()
-    while (menuchoice != "5"):
-        print(f"json_modifier version {__version__}")
-        print()
-        print("--- Menu ---")
-        print()
-        print("1: Read file")
-        print("2: Manipulate")
-        print("    2a: Delete Helices")
-        print("    2b: shift all helix-numbers")
-        print("    2c: shift position")
+def print_version(ctx, param, value):
+    if not value or ctx.resilient_parsing:
+        return
+    click.echo(__version__)
+    ctx.exit()
 
-        print("    2d: add another json file")
-        print("    2e: replace staple color")
-        print("    2f: erase scaffold loops")
 
-        print("    2h: color all staples")
-        print("    2i: erase all staples")
-        print("3: save current file")
-        print("4: fix old json_manipulator file")
-        print()
-        print("5: Exit")
-        print()
+@click.group()
+@click.option('--version', is_flag=True, callback=print_version,
+              expose_value=False, is_eager=True)
+def cli():
+    pass
 
-        menuchoice = input("Please choose number: ").strip()
-        # TODO: case
-        if menuchoice == "1":
-            while True:
-                json = Path(input("file-name?: "))
-                if json.exists() and json.suffix == ".json":
-                    break
-                else:
-                    print("thats not a valid file...")
-            manipulator = Manipulator(json)
-            ipdb.set_trace()
-            print("read {file}")
 
-        if menuchoice == "2a":
-            helixlist = input("Helix numbers? (comma separated): ")
-            number_before = manipulator.number_of_helices()
-            # search_list = helixlist.split(",")
-            # print (search_list)
-            selection = list
-            for helix in search_input_parse(helixlist):
-                selection.append(manipulator.find_helices("num", helix))
+@cli.command()
+@click.argument('cadnano', type=click.Path(exists=True))
+@click.option('--merge-cadnano',  type=click.Path(exists=True), default=None,
+              help="merge with a second cadnano design")
+@click.option('--shift-row', type=int, default=None,
+              help='shift helices by N rows. affected by selection')
+@click.option('--shift-col', type=int, default=None,
+              help='shift helices by N columns. affected by selection')
+@click.option('--shift-pos', type=int, default=None,
+              help='shift helices by N base positions. affected by selection')
+@click.option('--fix-legacy', is_flag=True,
+              help='attempt to fix legacy design for version < 0.7')
+@click.option('--remove-skips', is_flag=True,
+              help='remove all skips. affected by selection')
+@click.option('--remove-loops', is_flag=True,
+              help='remove all loops. affected by selection')
+@click.option('--select-subset', type=int, default=None,
+              help='subset of helices NOTIMPLEMENTED YET')
+def main(cadnano, merge_cadnano, shift_row, shift_col, shift_pos, fix_legacy,
+         remove_skips, remove_loops, select_subset):
+    """ manipulate cadnano design files
 
-            manipulator.delete_helices(selection)
-            number_after = manipulator.number_of_helices()
-            print("Number of deleted helices: " +
-                  str(number_before - number_after))
-            input("<any key>: go back to menu ")
+        CADNANO is the name of the design file [.json]
+    """
+    logger = logging.getLogger(__name__)
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('[%(name)s] %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
-        if menuchoice == "2b":
-            print(
-                "all helices numbers will be shifted by the following number. This number has to be even. ")
-            shiftnumber = int(input("number to shift?: "))
-            manipulator.shift_all_helices(shiftnumber)
+    cadnano = Path(cadnano)
+    if cadnano.suffix != ".json":
+        logger.error(".json file required!")
+        raise IOError
+    manipulator = Manipulator(cadnano)
+    logger.info(f"Design initialized from file: {cadnano} ")
 
-        if menuchoice == "2c":
+    if select_subset is None:
+        selection = manipulator.find_helices("all")
+    else:
+        raise NotImplementedError
 
-            helixlist = input("Helix numbers? (comma separated): ")
-            # number_before = manipulator.number_of_helices ()
-            # search_list = helixlist.split(",")
-            # print (search_list)
-            for helix in search_input_parse(helixlist):
-                manipulator.find_helices("num", helix)
-            manipulator.shift_arrangement(
-                input("number to shift helices rows?: "), "row")
-            manipulator.shift_arrangement(
-                input("number to shift helices cols?: "), "col")
+    if fix_legacy:
+        manipulator.fix_legacy()
+        out_json = cadnano.with_name(f"{cadnano.stem}_fix_legacy.json")
+        manipulator.generate_json_file(out_json)
+        return
+    elif merge_cadnano is not None:
+        merge_cadnano = Path(merge_cadnano)
+        manipulator.add_file(merge_cadnano)
+        out_json = cadnano.with_name(f"{cadnano.stem}_{merge_cadnano.name}")
+        manipulator.generate_json_file(out_json)
+        return
 
-        if menuchoice == "2d":
-            manipulator.add_file(input("filename of the file to add?: "))
-
-        if menuchoice == "2e":
-            old_color = input("old color (dec)?: ")
-            new_color = input("new color (dec)?: ")
-            manipulator.color_replace(old_color, new_color)
-
-        if menuchoice == "2f":
-            helixlist = input("Helix numbers? (comma separated): ")
-            selection = list
-            for helix in search_input_parse(helixlist):
-                selection.append(manipulator.find_helices("num", helix))
-            manipulator.erase_loops(selection)
-
-        if menuchoice == "2h":
-            manipulator.color_replace("all", input("new color (dec)?: "))
-
-        if menuchoice == "2i":
-            manipulator.erase_staples()
-
-        if menuchoice == "3":
-            while True:
-                out_json = Path(input("file-name?: "))
-                if not out_json.exists() and out_json.suffix == ".json":
-                    break
-                else:
-                    print("file exists or not a valid file")
-            manipulator.generate_json_file(out_json)
-
-        if menuchoice == "4":
-            manipulator.fix_legacy()
-
-        if menuchoice == "0":
-            manipulator.equalize_len()
+    mod_str = ""
+    if shift_pos is not None:
+        manipulator.shift_position(selection=selection, shift=shift_pos)
+        mod_str += f"_pos{shift_pos}"
+    if shift_row is not None:
+        if shift_row % 2:
+            logger.warning(
+                "Shifting by odd number of rows: Cadnano2 will not display crossovers!")
+        manipulator.shift_helix(selection=selection,
+                                shift=shift_row, direction="row")
+        mod_str += f"_row{shift_row}"
+    if shift_col is not None:
+        if shift_col % 2:
+            logger.warning(
+                "Shifting by odd number of columns: Cadnano2 will not display crossovers!")
+        manipulator.shift_helix(selection=selection,
+                                shift=shift_col, direction="col")
+        mod_str += f"_col{shift_col}"
+    out_json = cadnano.with_name(f"{cadnano.stem}{mod_str}.json")
+    manipulator.generate_json_file(out_json)
 
 
 if __name__ == "__main__":
-    random.seed(16777215)
-    main()
+    cli()

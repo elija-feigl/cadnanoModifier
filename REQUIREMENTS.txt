@@ -1,0 +1,10 @@
+Requirements:
+
+    Python Interpreter:
+        python >= 3.7
+
+    PyPi:
+        click >= 7.0
+
+    Operating System:
+        OS Independent

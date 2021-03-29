@@ -19,7 +19,7 @@ Implemented with click, the script provides three different commands:
   ```python3 cadnano_manipulator.py COMMAND```
 
 ## modify
-Usage: cadnano_manipulator.py modify [OPTIONS] CADNANO
+Usage: ```cadnano_manipulator.py modify [OPTIONS] CADNANO```
 
   manipulate cadnano design files for DNA Origami
 
@@ -40,7 +40,7 @@ Options:
   --help               Show this message and exit.
 
 ## merge
-Usage: cadnano_manipulator.py merge [OPTIONS] CADNANO MERGE
+Usage: ```cadnano_manipulator.py merge [OPTIONS] CADNANO MERGE```
 
   merge two cadnano design files for DNA Origami
 
@@ -52,7 +52,7 @@ Options:
   --help  Show this message and exit.
 
 ## fix
-Usage: cadnano_manipulator.py fix [OPTIONS] CADNANO
+Usage: ```cadnano_manipulator.py fix [OPTIONS] CADNANO```
 
   fix faulty cadnano design files for DNA Origami for: legacy cadnano (< 2.)
   json_modifier06.py

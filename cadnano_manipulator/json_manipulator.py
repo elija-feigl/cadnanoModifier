@@ -36,7 +36,7 @@ def cli():
 
 @cli.command()
 @click.argument('cadnano', type=click.Path(exists=True))
-@click.option('--merge-cadnano',  type=click.Path(exists=True), default=None,
+@click.option('--merge',  type=click.Path(exists=True), default=None,
               help="merge with a second cadnano design")
 @click.option('--shift-row', type=int, default=None,
               help='shift helices by N rows. affected by selection')
@@ -52,7 +52,7 @@ def cli():
               help='remove all loops. affected by selection')
 @click.option('--helix-subset', default=None,
               help='subset of helices selected by their number. format: "[1,2,3]"')
-def main(cadnano, merge_cadnano, shift_row, shift_col, shift_pos, fix_legacy,
+def main(cadnano, merge, shift_row, shift_col, shift_pos, fix_legacy,
          remove_skips, remove_loops, helix_subset):
     """ manipulate cadnano design files
 
@@ -93,48 +93,51 @@ def main(cadnano, merge_cadnano, shift_row, shift_col, shift_pos, fix_legacy,
         logger.info(
             "If no changes are reported by the manipulator your bug is not yet covered.")
         manipulator.fix_legacy()
-        out_json = cadnano.with_name(f"{cadnano.stem}_fix_legacy.json")
-        manipulator.generate_json_file(out_json)
-        return
-    elif merge_cadnano is not None:
-        logger.info(f"Merging {cadnano.name} with {merge_cadnano}.")
+        mod_str += "_fix_legacy"
+    elif merge is not None:
+        logger.info(f"Merging {cadnano.name} with {merge}.")
         if any([shift_pos, shift_row, shift_col]):
-            logger.info("Parsed modifications are ignored due to merge.")
-        merge_cadnano = Path(merge_cadnano)
-        manipulator.add_file(merge_cadnano)
-        out_json = cadnano.with_name(f"{cadnano.stem}_{merge_cadnano.name}")
-        manipulator.generate_json_file(out_json)
-        return
+            logger.warning("Parsed modifications are ignored due to merge.")
+        merge = Path(merge)
+        manipulator.add_file(merge)
+        mod_str += f"_{merge.name}"
+    else:
+        if shift_pos is not None:
+            logger.info(
+                f"Shifting selected helices by {shift_pos}  base positions.")
+            manipulator.shift_position(selection=selection, shift=shift_pos)
+            mod_str += f"_pos{shift_pos}"
+        if shift_row is not None:
+            logger.info(f"Shifting selected helices by {shift_row} rows.")
+            if shift_row % 2:
+                logger.warning(
+                    "Shifting by odd number of rows: Cadnano2 will not display crossovers!")
+            manipulator.shift_helix(selection=selection,
+                                    shift=shift_row, direction="row")
+            mod_str += f"_row{shift_row}"
+        if shift_col is not None:
+            logger.info(f"Shifting selected helices by {shift_row} columns.")
+            if shift_col % 2:
+                logger.warning(
+                    "Shifting by odd number of columns: Cadnano2 will not display crossovers!")
+            manipulator.shift_helix(selection=selection,
+                                    shift=shift_col, direction="col")
+            mod_str += f"_col{shift_col}"
 
-    if shift_pos is not None:
-        logger.info(
-            f"Shifting selected helices by {shift_pos}  base positions.")
-        manipulator.shift_position(selection=selection, shift=shift_pos)
-        mod_str += f"_pos{shift_pos}"
-    if shift_row is not None:
-        logger.info(f"Shifting selected helices by {shift_row} rows.")
-        if shift_row % 2:
-            logger.warning(
-                "Shifting by odd number of rows: Cadnano2 will not display crossovers!")
-        manipulator.shift_helix(selection=selection,
-                                shift=shift_row, direction="row")
-        mod_str += f"_row{shift_row}"
-    if shift_col is not None:
-        logger.info(f"Shifting selected helices by {shift_row} columns.")
-        if shift_col % 2:
-            logger.warning(
-                "Shifting by odd number of columns: Cadnano2 will not display crossovers!")
-        manipulator.shift_helix(selection=selection,
-                                shift=shift_col, direction="col")
-        mod_str += f"_col{shift_col}"
+        if remove_skips:
+            logger.info("Removing all skips in selected helices.")
+            manipulator.erase_skips()
+            mod_str += "_no-skips"
+        if remove_loops:
+            logger.info("Removing all loops in selected helices.")
+            manipulator.erase_loops()
+            mod_str += "_no-loops"
+
+        # TODO: delete helices option
+
     out_json = cadnano.with_name(f"{cadnano.stem}{mod_str}.json")
+    logger.info(f"Writing file {out_json}")
     manipulator.generate_json_file(out_json)
-
-    if remove_skips or remove_loops:
-        # TODO
-        raise NotImplementedError
-
-    # TODO: delete helices option
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ class Manipulator:
 
     def _get_logger(self, name):
         logger = logging.getLogger(name)
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.INFO)
         handler = logging.StreamHandler()
         formatter = logging.Formatter(
             '[%(name)s] %(levelname)s - %(message)s')
@@ -32,7 +32,6 @@ class Manipulator:
     def generate_json_file(self, outfile):
         out_data = self.data.copy()
         out_data["vstrands"] = self.helices
-        self.logger.info(f"GENERAL: writing file {outfile.name}")
         with outfile.open(mode='w') as f:
             json.dump(out_data, f)
 

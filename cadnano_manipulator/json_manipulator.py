@@ -2,8 +2,8 @@ from core.manipulator import Manipulator
 import logging
 from pathlib import Path
 import click
-
-import ipdb
+import json
+import sys
 
 __version__ = 0.8
 
@@ -50,15 +50,16 @@ def cli():
               help='remove all skips. affected by selection')
 @click.option('--remove-loops', is_flag=True,
               help='remove all loops. affected by selection')
-@click.option('--select-subset', type=int, default=None,
-              help='subset of helices NOTIMPLEMENTED YET')
+@click.option('--helix-subset', default=None,
+              help='subset of helices selected by their number. format: "[1,2,3]"')
 def main(cadnano, merge_cadnano, shift_row, shift_col, shift_pos, fix_legacy,
-         remove_skips, remove_loops, select_subset):
+         remove_skips, remove_loops, helix_subset):
     """ manipulate cadnano design files
 
         CADNANO is the name of the design file [.json]
     """
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("cli")
+    logger.setLevel(logging.INFO)
     handler = logging.StreamHandler()
     formatter = logging.Formatter('[%(name)s] %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
@@ -69,30 +70,49 @@ def main(cadnano, merge_cadnano, shift_row, shift_col, shift_pos, fix_legacy,
         logger.error(".json file required!")
         raise IOError
     manipulator = Manipulator(cadnano)
-    logger.info(f"Design initialized from file: {cadnano} ")
+    logger.debug(f"Design initialized from file: {cadnano} ")
 
-    if select_subset is None:
-        selection = manipulator.find_helices("all")
+    mod_str = ""
+    if helix_subset is None:
+        selection = manipulator.find_helices()
     else:
-        raise NotImplementedError
+        try:
+            helix_num_selection = json.loads(helix_subset)
+        except ValueError:
+            logger.error("Helix selection does not match required format.")
+            sys.exit(1)
+
+        logger.info(f"Using helix subset: {helix_num_selection}")
+        selection = manipulator.find_helices(helix_num_selection)
+        select_str = "-".join([str(s) for s in helix_num_selection])
+        mod_str += f"_helix-{select_str}"
 
     if fix_legacy:
+        logger.info(
+            "Removing empty segments on the right reduces filesize and cadnano2 speed/robustness.")
+        logger.info(
+            "If no changes are reported by the manipulator your bug is not yet covered.")
         manipulator.fix_legacy()
         out_json = cadnano.with_name(f"{cadnano.stem}_fix_legacy.json")
         manipulator.generate_json_file(out_json)
         return
     elif merge_cadnano is not None:
+        logger.info(f"Merging {cadnano.name} with {merge_cadnano}.")
+        if any([shift_pos, shift_row, shift_col]):
+            logger.info("Parsed modifications are ignored due to merge.")
         merge_cadnano = Path(merge_cadnano)
         manipulator.add_file(merge_cadnano)
         out_json = cadnano.with_name(f"{cadnano.stem}_{merge_cadnano.name}")
         manipulator.generate_json_file(out_json)
         return
 
-    mod_str = ""
     if shift_pos is not None:
+        logger.info(
+            f"Shifting selected helices by {shift_pos}  base positions.")
         manipulator.shift_position(selection=selection, shift=shift_pos)
         mod_str += f"_pos{shift_pos}"
     if shift_row is not None:
+        logger.info(f"Shifting selected helices by {shift_row} rows.")
         if shift_row % 2:
             logger.warning(
                 "Shifting by odd number of rows: Cadnano2 will not display crossovers!")
@@ -100,6 +120,7 @@ def main(cadnano, merge_cadnano, shift_row, shift_col, shift_pos, fix_legacy,
                                 shift=shift_row, direction="row")
         mod_str += f"_row{shift_row}"
     if shift_col is not None:
+        logger.info(f"Shifting selected helices by {shift_row} columns.")
         if shift_col % 2:
             logger.warning(
                 "Shifting by odd number of columns: Cadnano2 will not display crossovers!")
@@ -108,6 +129,12 @@ def main(cadnano, merge_cadnano, shift_row, shift_col, shift_pos, fix_legacy,
         mod_str += f"_col{shift_col}"
     out_json = cadnano.with_name(f"{cadnano.stem}{mod_str}.json")
     manipulator.generate_json_file(out_json)
+
+    if remove_skips or remove_loops:
+        # TODO
+        raise NotImplementedError
+
+    # TODO: delete helices option
 
 
 if __name__ == "__main__":

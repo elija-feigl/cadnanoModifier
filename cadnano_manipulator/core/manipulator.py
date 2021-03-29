@@ -3,7 +3,6 @@ from typing import List, Dict
 from pathlib import Path
 import json
 import logging
-
 import sys
 
 
@@ -37,12 +36,12 @@ class Manipulator:
         with outfile.open(mode='w') as f:
             json.dump(out_data, f)
 
-    def find_helices(self, propname="all", propvalue="") -> List:
-        """ search for helix by property name"""
-        if propname == "all":
+    def find_helices(self, numbers=None) -> List:
+        """ search for helix by number"""
+        if numbers is None:
             return list(range(len(self.helices)))
         else:
-            return [i for i, h in enumerate(self.helices) if h[propname] == propvalue]
+            return [i for i, h in enumerate(self.helices) if h["num"] in numbers]
 
     def delete_helices(self, selection):
         """ delete all helices in selection from manipulator
@@ -56,6 +55,15 @@ class Manipulator:
             n_bases = len(1 for b in del_helix["scaf"] if is_nonempty_(b))
             self.logger.debug(f"Removed Helix {num} with {n_bases} bases")
 
+    def _extend_helix(self, helix, n):
+        extra = [(4 * [-1])] * n
+        extra_loopskip = [0] * n
+
+        for key in ["scaf", "stap", "skip", "loop"]:
+            new = extra if key in ["scaf", "stap"] else extra_loopskip
+            helix[key] = helix[key] + new
+        return helix
+
     def shift_position(self, selection: List[int], shift: int):
         """ Shift the position of all selected helices.
             NOTE: scafLoop, stapLoop allways []
@@ -63,42 +71,45 @@ class Manipulator:
             CHANGES self.helix
         """
         def determine_helix_extension():
-            len_helix = len(self.helices[0]["scaf"])
-            for helix in self.helices:
+            def helical_ends(length):
+                minmax = [length, 0]
+                for helix in self.helices:
+                    for strand in ["scaf", "stap"]:
+                        for i, t in enumerate(minmax):
+                            reverse = bool(i)
+                            bases = reversed(
+                                helix[strand]) if reverse else helix[strand]
+                            idx = next(idx for idx, b in enumerate(
+                                bases) if is_nonempty_(b))
+                            idx = length-idx if reverse else idx
+                            if reverse and (idx > t):
+                                minmax[reverse] = idx
+                            elif not reverse and (idx < t):
+                                minmax[reverse] = idx
+                return minmax
 
-                minmax = [len_helix, 0]
-                for strand in ["scaf", "stap"]:
-                    for i, t in enumerate(minmax):
-                        reverse = bool(i)
-                        bases = helix[strand][::-
-                                              1] if reverse else helix[strand]
-                        idx = next(idx for idx, b in enumerate(
-                            bases) if is_nonempty_(b))
-                        idx = len_helix-idx if reverse else idx
-                        if reverse and (idx > t):
-                            minmax[reverse] = idx
-                        elif not reverse and (idx < t):
-                            minmax[reverse] = idx
+            len_helix = len(self.helices[0]["scaf"])
+            minmax = helical_ends(len_helix)
 
             if (minmax[0] + shift) < 0:
-                n_extra = abs(minmax[0] + shift)
-                extend_right = False
+                self.logger.error("Attempting to shift position below 0")
+                sys.exit(1)
+
             elif (minmax[1] + shift) > len_helix:
                 n_extra = (minmax[1] + shift) - len_helix
-                extend_right = True
             else:
-                return 0, False
+                return 0
 
             # NOTE: cadnano requires multiples of 32 bases for sq and 21 for hc
             HC, SQ = 21, 32
             n_multi = SQ if not len_helix % SQ else HC
-            if len_helix % 32 and len_helix % 7:
+            if len_helix % 32 and len_helix % HC:
                 prompt = ""
                 while prompt not in ["y", "n"]:
                     prompt = input("is this square lattice? [y/n]")
-                    n_multi = 32 if prompt == "y" else 7
+                    n_multi = SQ if prompt == "y" else HC
             n_extra = n_multi * (n_extra // n_multi + 1)
-            return n_extra, extend_right
+            return n_extra
 
         def adapt_overall_length():
             """ check if helices need to be extended with extra segments
@@ -106,19 +117,11 @@ class Manipulator:
 
                 CHANGES self.helix
             """
-            n_extra, extend_right = determine_helix_extension()
-            if not n_extra:
-                return
-            extra = [(4 * [-1])] * n_extra
-            extra_loopskip = [0] * n_extra
-            log_str = "right" if extend_right else "left"
-            self.logger.debug(f"adding {n_extra} bases to the {log_str}")
-
-            for helix in self.helices:
-                for key in ["scaf", "stap", "skip", "loop"]:
-                    new = extra if key in ["scaf", "stap"] else extra_loopskip
-                    helix[key] = (
-                        helix[key] + new) if extend_right else (new + helix[key])
+            n_extra = determine_helix_extension()
+            if n_extra:
+                self.logger.debug(f"adding {n_extra} bases")
+                for helix in self.helices:
+                    self._extend_helix(helix, n_extra)
 
         def shift_list(a_list, abs_shift, sign_shift):
             for _ in range(abs_shift):
@@ -153,10 +156,8 @@ class Manipulator:
             return base
 
         adapt_overall_length()
-
         abs_shift = abs(shift)
         sign_shift = abs(shift) // abs_shift
-
         for idx in selection:
             helix = self.helices[idx]
             for key in ["skip", "loop", "scaf", "stap"]:
@@ -171,8 +172,8 @@ class Manipulator:
         """ Shift the all selected helices either by row or column
         """
         if direction not in ["col", "row"]:
-            print("can only shift a helix by row or col")
-            return
+            self.logger.error("Can only shift a helix by row or col")
+            sys.exit(1)
 
         helices = self.helices.copy()
         for idx in selection:
@@ -181,8 +182,8 @@ class Manipulator:
 
         helix_positions = [(h["row"], h["col"]) for h in helices]
         if len(helix_positions) != len(set(helix_positions)):
-            print("ABORT: shifting onto existing helix")
-            return
+            self.logger.error("Shifting onto existing helix")
+            sys.exit(1)
 
         self.helice = helices
 
@@ -221,24 +222,28 @@ class Manipulator:
         coor_add = {(h["row"], h["col"]) for h in helices_add}
         coor = {(h["row"], h["col"]) for h in self.helices}
         if not (coor - coor_add):
-            print("ABORT: these designs overlap")
-            return
+            self.logger.error("These designs overlap")
+            sys.exit(1)
 
         # make sure they have the same length
         len_helix = len(self.helices[0]["scaf"])
         len_helix_add = len(helices_add[0]["scaf"])
         len_add = abs(len_helix - len_helix_add)
-        helices_to_extend = self.helices if len_helix > len_helix_add else helices_add
+        if len_add > 0:
+            self.logger.debug(
+                f"One of the designs needs to be extended by {len_add} bases")
+        helices_to_extend = self.helices if len_helix < len_helix_add else helices_add
         for helix in helices_to_extend:
-            for strand in ["scaf", "stap"]:
-                helix[strand] = [(4 * [-1])] * len_add
-            for mod in ["skip", "loop"]:
-                helix[mod] = [0] * len_add
+            self._extend_helix(helix, len_add)
 
         # push helix num of 2nd
-        max_num = max(h["num"] for h in self.helices)
-        for h in helices_add:
-            h["num"] += max_num
+        num_add = max(h["num"] for h in self.helices) + 1
+        for helix_add in helices_add:
+            helix_add["num"] += num_add
+            for strand in ["scaf", "stap"]:
+                for base in helix_add[strand]:
+                    for i in [0, 2]:
+                        base[i] = base[i] + num_add if base[i] != -1 else - 1
 
         self.helices += helices_add
         self.data["name"] += " + " + data_add["name"]
@@ -248,14 +253,6 @@ class Manipulator:
                 Fix errors with:
                 * stap_color: p not updated
         """
-        def is_5p(b) -> bool:
-            return (b[1] == -1) and (b[3] != -1)
-
-        self.logger.info(
-            "GENERAL: removing empty segments on the right reduces filesize and cadnano2 speed/robustness.")
-        self.logger.info(
-            "GENERAL: if no changes are reported your bug is not yet covered.")
-
         length_max = len(self.helices[0]["stap"])
         need_reset_length = False
         for helix in self.helices:
@@ -284,8 +281,9 @@ class Manipulator:
             length_loop = len(helix["loop"])
             length_skip = len(helix["skip"])
             if not (length == length_scaf == length_loop == length_loop):
+                length_log = (length_scaf, length, length_skip, length_loop)
                 self.logger.debug(
-                    f"Length of scaf, stap, loop, skips do not match for helix {num}:{(length_scaf, length, length_skip, length_loop)}")
+                    f"Length of scaf, stap, loop, skips do not match for helix {num}:{length_log}")
                 for strand in ["scaf", "stap"]:
                     if len(helix[strand]) < length_max:
                         add = length_max - len(helix[strand])
@@ -316,3 +314,7 @@ class Manipulator:
 
 def is_nonempty_(base) -> bool:
     return any(x != -1 for x in base)
+
+
+def is_5p(b) -> bool:
+    return (b[1] == -1) and (b[3] != -1)

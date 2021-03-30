@@ -238,6 +238,9 @@ class Manipulator:
 
         # push helix num of 2nd
         num_add = max(h["num"] for h in self.helices) + 1
+        if num_add % 2:
+            num_add += 1
+
         for helix_add in helices_add:
             helix_add["num"] += num_add
             for strand in ["scaf", "stap"]:

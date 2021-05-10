@@ -8,14 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
-import click
-
-__version__ = 1.0
-__authors__ = "Elija Feigl"
-__copyright__ = "Copyright 2021, Dietzlab (TUM)"
-__license__ = "GNU General Public License Version 3"
-__email__ = "elija.feigl@tum.de"
-__status__ = "alpha"
+from .util import is_5p, is_nonempty_
 
 
 @dataclass
@@ -23,6 +16,7 @@ class Manipulator:
     path: Path
 
     def __post_init__(self):
+        self.logger = logging.getLogger(__name__)
         with self.path.open(mode="r") as f:
             self.data = json.load(f)
         self.helices: List[Dict] = self.data["vstrands"].copy()
@@ -53,7 +47,7 @@ class Manipulator:
             # TODO: fix "broken" crossovers
             num = del_helix["num"]
             n_bases = len(1 for b in del_helix["scaf"] if is_nonempty_(b))
-            logger.debug(f"Removed Helix {num} with {n_bases} bases")
+            self.logger.debug(f"Removed Helix {num} with {n_bases} bases")
 
     def _extend_helix(self, helix, n):
         extra = [(4 * [-1])] * n
@@ -92,7 +86,7 @@ class Manipulator:
             minmax = helical_ends(len_helix)
 
             if (minmax[0] + shift) < 0:
-                logger.error("Attempting to shift position below 0")
+                self.logger.error("Attempting to shift position below 0")
                 sys.exit(1)
 
             elif (minmax[1] + shift) > len_helix:
@@ -119,7 +113,7 @@ class Manipulator:
             """
             n_extra = determine_helix_extension()
             if n_extra:
-                logger.debug(f"adding {n_extra} bases")
+                self.logger.debug(f"adding {n_extra} bases")
                 for helix in self.helices:
                     self._extend_helix(helix, n_extra)
 
@@ -142,7 +136,7 @@ class Manipulator:
                     base[1] += shift
                 else:  # a crossover points from here to an unselected helix
                     self.helices[co_idx][strand][base[1]][3] += shift
-                    logger.debug(
+                    self.logger.debug(
                         f"fixed broken crossover at {(base[0], base[1])}")
             if base[2] != -1:
                 co_idx = next(i for i, h in enumerate(
@@ -151,7 +145,7 @@ class Manipulator:
                     base[3] += shift
                 else:  # a crossover of an unselected helix point here
                     self.helices[co_idx][strand][base[3]][1] += shift
-                    logger.debug(
+                    self.logger.debug(
                         f"fixed broken crossover at {(base[2], base[3])}")
             return base
 
@@ -172,7 +166,7 @@ class Manipulator:
         """ Shift the all selected helices either by row or column
         """
         if direction not in ["col", "row"]:
-            logger.error("Can only shift a helix by row or col")
+            self.logger.error("Can only shift a helix by row or col")
             sys.exit(1)
 
         helices = self.helices.copy()
@@ -182,7 +176,7 @@ class Manipulator:
 
         helix_positions = [(h["row"], h["col"]) for h in helices]
         if len(helix_positions) != len(set(helix_positions)):
-            logger.error("Shifting onto existing helix")
+            self.logger.error("Shifting onto existing helix")
             sys.exit(1)
 
         self.helice = helices
@@ -222,7 +216,7 @@ class Manipulator:
         coor_add = {(h["row"], h["col"]) for h in helices_add}
         coor = {(h["row"], h["col"]) for h in self.helices}
         if not (coor - coor_add):
-            logger.error("These designs overlap helices.")
+            self.logger.error("These designs overlap helices.")
             sys.exit(1)
 
         # make sure they have the same length
@@ -230,7 +224,7 @@ class Manipulator:
         len_helix_add = len(helices_add[0]["scaf"])
         len_add = abs(len_helix - len_helix_add)
         if len_add > 0:
-            logger.debug(
+            self.logger.debug(
                 f"One of the designs needs to be extended by {len_add} bases.")
         helices_to_extend = self.helices if len_helix < len_helix_add else helices_add
         for helix in helices_to_extend:
@@ -264,7 +258,7 @@ class Manipulator:
             p5s = [p for p, b in enumerate(helix["stap"]) if is_5p(b)]
             p5s_legacy = [p for p, _ in helix["stap_colors"]]
             if p5s != p5s_legacy:
-                logger.info("Resetting faulty staple_color dictionary")
+                self.logger.info("Resetting faulty staple_color dictionary")
                 has_change = True
                 helix["stap_colors"] = [[p, color]
                                         for p, (_, color) in zip(p5s, helix["stap_colors"])]
@@ -272,13 +266,13 @@ class Manipulator:
             length = len(helix["stap"])
             num = helix["num"]
             if not length % 32 and not length % 21:
-                logger.info(
+                self.logger.info(
                     f"Incorrect length for either SQ or HC: helix {num}:{length} bases")
                 # NOTE: might not need a fix, just info
 
             if length != length_max:
                 need_reset_length = True
-                logger.debug(
+                self.logger.debug(
                     f"Length not matching for helix {num}:{length} bases")
             length_max = length if length > length_max else length_max
 
@@ -287,26 +281,26 @@ class Manipulator:
             length_skip = len(helix["skip"])
             if not (length == length_scaf == length_loop == length_loop):
                 length_log = (length_scaf, length, length_skip, length_loop)
-                logger.debug(
+                self.logger.debug(
                     f"Length of scaf, stap, loop, skips do not match for helix {num}:{length_log}")
                 for strand in ["scaf", "stap"]:
                     if len(helix[strand]) < length_max:
                         add = length_max - len(helix[strand])
                         helix[strand] += [(4 * [-1])] * add
-                        logger.debug(
+                        self.logger.debug(
                             f"Adding {add} empty bases to the end of {strand}")
                 for mod in ["loop", "skip"]:
                     if len(helix[mod]) < length_max:
                         add = length_max - len(helix[mod])
                         helix[mod] += [0] * add
-                        logger.debug(
+                        self.logger.debug(
                             f"Adding {add} empty bases to the end of {mod}")
-                logger.info(
+                self.logger.info(
                     f"Fix length inconsistency of subelements for helix {num}")
                 has_change = True
 
         if need_reset_length:
-            logger.info(
+            self.logger.info(
                 f"Resetting inconsistent helical length to {length_max}")
             has_change = True
             for helix in self.helices:
@@ -318,190 +312,3 @@ class Manipulator:
                     helix["loop"] += [0] * add
                     helix["skip"] += [0] * add
         return has_change
-
-
-def is_nonempty_(base) -> bool:
-    return any(x != -1 for x in base)
-
-
-def is_5p(b) -> bool:
-    return (b[1] == -1) and (b[3] != -1)
-
-
-def search_input_parse(searchterm):
-    searchterm = searchterm.strip()
-    if searchterm.find("-") < 0:
-        return (searchterm.split(","))
-    else:
-        boundaries = searchterm.split("-")
-        helixlist = str()
-        for i in range(int(boundaries[0]), int(boundaries[1])+1):
-            helixlist = helixlist+str(i)+","
-        return (helixlist[0:len(helixlist)-1].split(","))
-
-
-def print_version(ctx, param, value):
-    if not value or ctx.resilient_parsing:
-        return
-    click.echo(__version__)
-    ctx.exit()
-
-
-@click.group()
-@click.option('--version', is_flag=True, callback=print_version,
-              expose_value=False, is_eager=True)
-def cli():
-    pass
-
-
-@cli.command()
-@click.argument('cadnano', type=click.Path(exists=True))
-def fix(cadnano):
-    """ fix faulty cadnano design files for DNA Origami for:
-            legacy cadnano (< 2.)
-            json_modifier06.py
-
-            CADNANO is the name of the design file [.json]
-    """
-    cadnano = Path(cadnano)
-    if cadnano.suffix != ".json":
-        logger.error(".json file required!")
-        raise IOError
-
-    manipulator = Manipulator(cadnano)
-    logger.debug(f"Design initialized from file: {cadnano}.")
-    logger.info(
-        "Removing empty segments on the right reduces filesize and cadnano2 speed/stability.")
-
-    status = manipulator.fix_legacy()
-    if status:
-        out_json = cadnano.with_name(f"{cadnano.stem}_fix_legacy.json")
-        logger.info(f"Writing file {out_json}")
-        manipulator.generate_json_file(out_json)
-    else:
-        logger.info("Nothing to do. (or your bug is not yet covered).")
-
-
-@cli.command()
-@click.argument('cadnano', type=click.Path(exists=True))
-@click.argument('merge',  type=click.Path(exists=True))
-def merge(cadnano, merge):
-    """ merge two cadnano design files for DNA Origami
-
-            CADNANO is the name of the first design file [.json]\n
-            MERGE is the name of the second design file [.json]
-    """
-    cadnano = Path(cadnano)
-    merge = Path(merge)
-
-    if cadnano.suffix != ".json" or merge.suffix != ".json":
-        logger.error(".json file required!")
-        raise IOError
-
-    manipulator = Manipulator(cadnano)
-    logger.debug(f"Design initialized from file: {cadnano} ")
-
-    logger.info(f"Merging {cadnano.name} with {merge}.")
-    merge = Path(merge)
-    manipulator.add_file(merge)
-
-    out_json = cadnano.with_name(f"{cadnano.stem}_{merge.stem}.json")
-    logger.info(f"Writing file {out_json}")
-    manipulator.generate_json_file(out_json)
-
-
-@cli.command()
-@click.argument('cadnano', type=click.Path(exists=True))
-@click.option('--shift-row', type=int, default=None,
-              help='shift helices by N rows. affected by selection')
-@click.option('--shift-col', type=int, default=None,
-              help='shift helices by N columns. affected by selection')
-@click.option('--shift-pos', type=int, default=None,
-              help='shift helices by N base positions. affected by selection')
-@click.option('--fix-legacy', is_flag=True,
-              help='attempt to fix legacy design for version < 0.7')
-@click.option('--remove-skips', is_flag=True,
-              help='remove all skips. affected by selection')
-@click.option('--remove-loops', is_flag=True,
-              help='remove all loops. affected by selection')
-@click.option('--helix-subset', default=None,
-              help='subset of helices selected by their number. format: "[1,2,3]"')
-def modify(cadnano, shift_row, shift_col, shift_pos, fix_legacy,
-           remove_skips, remove_loops, helix_subset):
-    """ manipulate cadnano design files for DNA Origami
-
-         CADNANO is the name of the design file [.json]
-    """
-    cadnano = Path(cadnano)
-    if cadnano.suffix != ".json":
-        logger.error(".json file required!")
-        raise IOError
-    manipulator = Manipulator(cadnano)
-    logger.debug(f"Design initialized from file: {cadnano} ")
-
-    mod_str = ""
-    if helix_subset is None:
-        selection = manipulator.find_helices()
-    else:
-        try:
-            helix_num_selection = json.loads(helix_subset)
-        except ValueError:
-            logger.error("Helix selection does not match required format.")
-            sys.exit(1)
-
-        logger.info(f"Using helix subset: {helix_num_selection}")
-        selection = manipulator.find_helices(helix_num_selection)
-        select_str = "-".join([str(s) for s in helix_num_selection])
-        mod_str += f"_helix-{select_str}"
-
-    if shift_pos is not None:
-        logger.info(
-            f"Shifting selected helices by {shift_pos}  base positions.")
-        manipulator.shift_position(selection=selection, shift=shift_pos)
-        mod_str += f"_pos{shift_pos}"
-    if shift_row is not None:
-        logger.info(f"Shifting selected helices by {shift_row} rows.")
-        if shift_row % 2:
-            logger.warning(
-                "Shifting by odd number of rows: Cadnano2 will not display crossovers!")
-        manipulator.shift_helix(selection=selection,
-                                shift=shift_row, direction="row")
-        mod_str += f"_row{shift_row}"
-    if shift_col is not None:
-        logger.info(f"Shifting selected helices by {shift_col} columns.")
-        if shift_col % 2:
-            logger.warning(
-                "Shifting by odd number of columns: Cadnano2 will not display crossovers!")
-        manipulator.shift_helix(selection=selection,
-                                shift=shift_col, direction="col")
-        mod_str += f"_col{shift_col}"
-
-    if remove_skips:
-        logger.info("Removing all skips in selected helices.")
-        manipulator.erase_skips(selection=selection)
-        mod_str += "_no-skips"
-
-    if remove_loops:
-        logger.info("Removing all loops in selected helices.")
-        manipulator.erase_loops(selection=selection)
-        mod_str += "_no-loops"
-
-    # TODO: delete_helices option
-
-    if mod_str == "":
-        logger.warning("Nothing to do.")
-    else:
-        out_json = cadnano.with_name(f"{cadnano.stem}{mod_str}.json")
-        logger.info(f"Writing file {out_json}")
-        manipulator.generate_json_file(out_json)
-
-
-if __name__ == "__main__":
-    logger = logging.getLogger("CadnanoManipulator")
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('[%(name)s] %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-
-    cli()

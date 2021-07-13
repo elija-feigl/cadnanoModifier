@@ -12,7 +12,8 @@ with open("README.md", "r") as fh:
 with open("LICENSE", "r") as fh:
     license = fh.read()
 
-if sys.version_info < (7, 0):
+v_python = sys.version_info
+if (v_python.major <= 3) and (v_python.minor <= 7):
     sys.exit('Sorry, Python < 3.7.0 is not supported')
 
 setup(
